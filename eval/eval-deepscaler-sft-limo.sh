@@ -6,7 +6,7 @@ python eval.py \
 --temperature 0.6 \
 --start_idx 0 \
 --end_idx -1 \
---n_sampling 16 \
+--n_sampling 64 \
 --k 1 \
 --split "test" \
 --max_tokens 32768 \

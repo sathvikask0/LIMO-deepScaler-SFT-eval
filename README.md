@@ -1,17 +1,37 @@
-# run AIME eval on deepScaleR + SFT trained model on LIMO dataset
+# Run AIME eval on deepScaleR + SFT trained model on LIMO dataset
 
-install dependencies using eval/requirements.txt
+## Environment Setup
+```bash
+# Create new conda environment
+conda create -n limo python=3.11 --no-default-packages
 
-then do:
-bash eval.sh
+# Navigate to eval directory
+cd eval/
 
-nothing else is needed
+# Activate environment
+conda activate limo
+
+# Install PyTorch first (required)
+pip install torch==2.4.0
+
+# Install other requirements
+pip install -r requirements.txt
+```
+
+## Running Evaluation
+```bash
+# Run evaluation script
+bash eval-{any-file-you-want}.sh  # Modify to use any model from HuggingFace
+```
+
+**Note:** No additional setup is required beyond these steps.
 
 
 
 
 
-prev readme:
+
+## previous readme:
 
 # LIMO: Less Is More for Reasoning 🚀
 
