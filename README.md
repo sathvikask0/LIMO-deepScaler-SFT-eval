@@ -1,4 +1,24 @@
+# run AIME eval on deepScaleR + SFT trained model on LIMO dataset
+
+install dependencies using eval/requirements.txt
+
+then do:
+bash eval.sh
+
+nothing else is needed
+
+
+
+
+
+prev readme:
+
 # LIMO: Less Is More for Reasoning 🚀
+
+
+
+
+
 
 <p align="center">
   📄 <a href="https://arxiv.org/pdf/2502.03387" target="_blank">Paper</a> &nbsp; | &nbsp;

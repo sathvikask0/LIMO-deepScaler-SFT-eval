@@ -52,7 +52,8 @@ def parse_args():
     # parser.add_argument("--use_qwen_check", action="store_true")
     args = parser.parse_args()
     
-    args.top_p = 1 if args.temperature == 0 else args.top_p # top_p must be 1 when using greedy 
+    # top_p must be 1 when using greedy decoding (temperature=0)
+    args.top_p = 1 if args.temperature == 0 else args.top_p 
     print(f"current stop list: {args.stop}")
     return args
 
@@ -68,7 +69,7 @@ def get_three_prompt(prompt_type, data_name):
     file_path = os.path.join(".", "prompts", prompt_type, f"{data_name}.py")
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
-    # 动态导入模块
+    # Dynamically import the module
     spec = importlib.util.spec_from_file_location("dynamic_module", file_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -90,23 +91,31 @@ def get_three_prompt(prompt_type, data_name):
 
     return system_prompt, few_shot_prompt, question_format
 
-
 def infer(args):
     model_name_or_path = args.model_name_or_path
     print(f"current eval model: {model_name_or_path}")
     
-    n_sampling = args.n_sampling
-    factor = 1
-    for i in range(2, 65):
-        if n_sampling % i == 0:
-            factor = i
-    generation_epoch = n_sampling // factor
+    # Check available GPUs and set generation factor accordingly.
+    available_gpus = os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')
+    print(f"available_gpus: {available_gpus}")
+    if len(available_gpus) == 1:
+        # With a single GPU, generate one sample per call.
+        factor = 1
+        generation_epoch = args.n_sampling  # run as many rounds as n_sampling
+    else:
+        factor = 1
+        for i in range(2, 65):
+            if args.n_sampling % i == 0:
+                factor = i
+        generation_epoch = args.n_sampling // factor
     print(f"use n = {factor}, generation epoch is: {generation_epoch}")
-    sampling_params = SamplingParams(temperature=args.temperature, 
-                                     max_tokens=args.max_tokens, 
-                                     n=factor,
-                                     top_p=args.top_p,
-                                     )
+    
+    sampling_params = SamplingParams(
+        temperature=args.temperature, 
+        max_tokens=args.max_tokens, 
+        n=factor,
+        top_p=args.top_p,
+    )
     
     examples = load_data(args.data_name, args.split, args.data_dir)
     if args.end_idx == -1:
@@ -118,21 +127,21 @@ def infer(args):
     out_file_prefix = f'{args.split}_{args.prompt_type}_t{args.temperature}'
     out_file = f'{args.output_dir}/{model_name}/{args.data_name}/{out_file_prefix}_k{args.n_sampling}_s{args.start_idx}_e{args.end_idx}.jsonl'
     
-    
     if os.path.exists(out_file):
-        print(f"Completely same name file({out_file}) exist, skip generation, save file and check correct")
+        print(f"File ({out_file}) already exists. Skipping generation.")
         return
     os.makedirs(f'{args.output_dir}/{model_name}/{args.data_name}', exist_ok=True)
     os.makedirs(f'{args.completions_save_dir}/{model_name}/{args.data_name}', exist_ok=True)
     
-    available_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+    # Set host IP for single GPU usage.
     if len(available_gpus) == 1:
-        envs.VLLM_HOST_IP="0.0.0.0" or "127.0.0.1"
-    print(f"available_gpus: {available_gpus}")
+        envs.VLLM_HOST_IP = "127.0.0.1"  # alternatively "0.0.0.0"
+    print(f"Using host IP: {envs.VLLM_HOST_IP}")
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
     prompt_batch = []
     for example in tqdm(examples, total=len(examples)):
-        # parse question and answer
+        # Parse question and answer
         question = parse_question(example, args.data_name)
         system_prompt, few_shot_prompt, question_format = get_three_prompt(args.prompt_type, args.data_name)
         
@@ -147,14 +156,16 @@ def infer(args):
             ]
             cur_prompt = get_conversation_prompt_by_messages(tokenizer=tokenizer, messages=messages)
         prompt_batch.append(cur_prompt)
+    print("Example prompt:")
     print(prompt_batch[0])
     
-    llm = LLM(model=model_name_or_path, 
-              tensor_parallel_size=len(available_gpus), 
-              trust_remote_code=True, 
-            #   swap_space=60,
-              gpu_memory_utilization=0.96,
-              )
+    llm = LLM(
+        model=model_name_or_path, 
+        tensor_parallel_size=len(available_gpus), 
+        trust_remote_code=True, 
+        # swap_space=60,
+        gpu_memory_utilization=0.96,
+    )
     
     file_outputs = []
     correct_cnt = 0
@@ -162,15 +173,14 @@ def infer(args):
         completions_save_file = f'{args.completions_save_dir}/{model_name}/{args.data_name}/{out_file_prefix}_k{args.n_sampling}_s{args.start_idx}_e{args.end_idx}_gen_round{cur_generation_epoch}.pkl'
         
         completions = llm.generate(prompt_batch, sampling_params)
-        
         save_completions(completions, completions_save_file)
+        
         for i in range(len(examples)):
             d = examples[i]
-            question = parse_question(d, args.data_name)
             generated_responses = [completions[i].outputs[j].text for j in range(len(completions[i].outputs))]
             if cur_generation_epoch == 0:
                 file_outputs.append({
-                    "question": question,
+                    "question": parse_question(d, args.data_name),
                     "generated_responses": generated_responses,
                 })
                 if "id" in d:
@@ -179,14 +189,13 @@ def infer(args):
                     file_outputs[i]["source"] = d["source"]
             else:
                 file_outputs[i]['generated_responses'] += generated_responses
-    print("llm generate done")
-    print(len(file_outputs))
+    print("LLM generation done")
+    print(f"Number of examples: {len(file_outputs)}")
     
     pass_at_k_list = []
     k = args.k
-    
 
-    for i in tqdm(range(len(examples)), "check correct..."):
+    for i in tqdm(range(len(examples)), "checking correctness..."):
         d = examples[i]
         gt_cot, gt_ans = parse_ground_truth(d, args.data_name)
         generated_responses = file_outputs[i]['generated_responses']
@@ -211,9 +220,6 @@ def infer(args):
                 pass_at_k_list.append(pass_at_k)
             else:
                 pass_at_k_list.append(0)
-                
-
-            
     
     temp_out_file = out_file + ".tmp"
     with open(temp_out_file, 'w', encoding='utf-8') as f:
@@ -227,15 +233,14 @@ def infer(args):
         f.flush()
     os.rename(temp_out_file, out_file)
     
-    print(f"correct cnt / total cnt: {correct_cnt}/{len(examples)}")
-    print(f"Acc: {correct_cnt / len(examples):.4f}")
+    print(f"Correct count / total count: {correct_cnt}/{len(examples)}")
+    print(f"Accuracy: {correct_cnt / len(examples):.4f}")
 
     if pass_at_k_list:
         average_pass_at_k = sum(pass_at_k_list) / len(pass_at_k_list)
         print(f"Pass@{k}: {sum(pass_at_k_list)}/{len(pass_at_k_list)} = {average_pass_at_k:.4f}")
     else:
         print(f"Pass@1: {correct_cnt}/{len(examples)} = {correct_cnt / len(examples):.4f}")
-
 
 if __name__ == "__main__":
     args = parse_args()
